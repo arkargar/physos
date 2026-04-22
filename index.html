@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>PhysOS - AI Cable Bend Detection</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #000; color: white; overflow: hidden; position: fixed; width: 100%; height: 100%; }
+        .mode-toggle { position: absolute; top: 20px; left: 20px; right: 20px; z-index: 20; display: flex; gap: 10px; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); border-radius: 40px; padding: 5px; }
+        .mode-btn { flex: 1; padding: 12px; border: none; border-radius: 35px; font-size: 14px; font-weight: 600; cursor: pointer; background: transparent; color: #aaa; }
+        .mode-btn.active { background: #00ff88; color: #000; }
+        .camera-view { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; }
+        .camera-view.active { display: block; }
+        #video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .upload-view { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; background: #0a0a0a; overflow-y: auto; padding: 100px 20px 20px 20px; }
+        .upload-view.active { display: block; }
+        .upload-area { background: #1a1a1a; border: 2px dashed #444; border-radius: 20px; padding: 50px 20px; text-align: center; cursor: pointer; margin-bottom: 20px; }
+        .upload-icon { font-size: 48px; margin-bottom: 10px; }
+        .upload-text { color: #aaa; }
+        input[type="file"] { display: none; }
+        .image-preview { text-align: center; margin-bottom: 20px; display: none; }
+        .image-preview img { max-width: 100%; max-height: 300px; border-radius: 16px; }
+        .results-overlay { position: absolute; bottom: 20px; left: 20px; right: 20px; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 24px; padding: 20px; z-index: 10; }
+        .angle-display { text-align: center; font-size: 48px; font-weight: bold; font-family: monospace; }
+        .status-text { text-align: center; font-size: 16px; margin-top: 5px; font-weight: 500; }
+        .gauge-container { background: #333; border-radius: 10px; height: 8px; margin: 15px 0; overflow: hidden; }
+        .gauge-fill { width: 0%; height: 100%; transition: width 0.1s linear; }
+        .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #333; }
+        .metric { text-align: center; }
+        .metric-label { font-size: 10px; color: #888; }
+        .metric-value { font-size: 14px; font-weight: bold; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 30px; font-weight: 600; margin-top: 15px; cursor: pointer; }
+        .btn-secondary { background: #333; color: white; }
+        .good { color: #00ff88; }
+        .caution { color: #ffcc00; }
+        .warning { color: #ff8800; }
+        .critical { color: #ff3300; }
+        .bg-good { background: #00ff88; }
+        .bg-caution { background: #ffcc00; }
+        .bg-warning { background: #ff8800; }
+        .bg-critical { background: #ff3300; }
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 100; background: rgba(0,0,0,0.9); padding: 30px; border-radius: 20px; display: none; }
+        .spinner { width: 40px; height: 40px; border: 3px solid #333; border-top-color: #00ff88; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .instruction { position: absolute; top: 80px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,0.5); font-size: 12px; z-index: 10; }
+        .server-status { position: absolute; top: 80px; right: 20px; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 20px; font-size: 10px; z-index: 10; }
+        .server-status.connected { background: #00ff88; color: #000; }
+        .server-status.disconnected { background: #ff3300; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="mode-toggle">
+        <button class="mode-btn active" id="modeGuidanceBtn">📹 Live Guidance</button>
+        <button class="mode-btn" id="modeUploadBtn">📷 Upload Photo</button>
+    </div>
+    
+    <div class="camera-view active" id="cameraView">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="instruction">Point camera at cable | Bend to see gauge change</div>
+        <div class="server-status disconnected" id="serverStatus">API: Connecting...</div>
+        <div class="results-overlay">
+            <div class="angle-display" id="camAngle">--°</div>
+            <div class="status-text" id="camStatus">Initializing...</div>
+            <div class="gauge-container"><div class="gauge-fill" id="camGauge"></div></div>
+            <div class="metrics">
+                <div class="metric"><div class="metric-label">Quality</div><div class="metric-value" id="camQuality">--</div></div>
+                <div class="metric"><div class="metric-label">Status</div><div class="metric-value" id="camConfidence">--</div></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="upload-view" id="uploadView">
+        <div class="upload-area" id="uploadArea"><div class="upload-icon">📸</div><div class="upload-text">Tap to take photo or upload cable image</div></div>
+        <input type="file" id="fileInput" accept="image/*" capture="environment">
+        <div class="image-preview" id="previewContainer"><img id="previewImage" alt="Preview"></div>
+        <div id="uploadResults" style="display: none;">
+            <div class="angle-display" id="uploadAngle">--°</div>
+            <div class="status-text" id="uploadStatus">--</div>
+            <div class="gauge-container"><div class="gauge-fill" id="uploadGauge"></div></div>
+            <div class="metrics">
+                <div class="metric"><div class="metric-label">Quality</div><div class="metric-value" id="uploadQuality">--</div></div>
+                <div class="metric"><div class="metric-label">Recommendation</div><div class="metric-value" id="uploadRecommendation">--</div></div>
+            </div>
+            <button class="btn-secondary" id="resetUploadBtn">Analyze Another Image</button>
+        </div>
+    </div>
+    
+    <div class="loading" id="loading"><div class="spinner"></div><p>Analyzing cable...</p></div>
+
+    <script>
+        const modeGuidanceBtn = document.getElementById('modeGuidanceBtn');
+        const modeUploadBtn = document.getElementById('modeUploadBtn');
+        const cameraView = document.getElementById('cameraView');
+        const uploadView = document.getElementById('uploadView');
+        const video = document.getElementById('video');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const previewContainer = document.getElementById('previewContainer');
+        const previewImage = document.getElementById('previewImage');
+        const uploadResults = document.getElementById('uploadResults');
+        const loadingDiv = document.getElementById('loading');
+        const resetUploadBtn = document.getElementById('resetUploadBtn');
+        const serverStatus = document.getElementById('serverStatus');
+        
+        const camAngle = document.getElementById('camAngle');
+        const camStatus = document.getElementById('camStatus');
+        const camGauge = document.getElementById('camGauge');
+        const camQuality = document.getElementById('camQuality');
+        const camConfidence = document.getElementById('camConfidence');
+        
+        const uploadAngle = document.getElementById('uploadAngle');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadGauge = document.getElementById('uploadGauge');
+        const uploadQuality = document.getElementById('uploadQuality');
+        const uploadRecommendation = document.getElementById('uploadRecommendation');
+        
+        let analysisInterval = null;
+        let stream = null;
+        let isConnected = false;
+        
+        const THRESHOLD_GOOD = 25;
+        const THRESHOLD_WARNING = 50;
+        const THRESHOLD_CRITICAL = 70;
+        
+        const API_URL = 'http://172.16.224.131:5000/analyze';
+        
+        async function checkServerConnection() {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ test: true })
+                });
+                isConnected = true;
+                serverStatus.textContent = 'API: Connected';
+                serverStatus.className = 'server-status connected';
+            } catch (error) {
+                isConnected = false;
+                serverStatus.textContent = 'API: Offline';
+                serverStatus.className = 'server-status disconnected';
+            }
+        }
+        
+        async function analyzeImage(base64Image, isUpload = false) {
+            if (!isConnected) {
+                if (!isUpload) updateUI(0, false, 'API Disconnected');
+                return null;
+            }
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: base64Image })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    updateUI(result.angle, isUpload);
+                    return result;
+                }
+            } catch (error) {
+                if (!isUpload) updateUI(0, false, 'API Error');
+            }
+            return null;
+        }
+        
+        function updateUI(angle, isUpload = false, errorMsg = null) {
+            if (errorMsg) {
+                if (isUpload) uploadStatus.textContent = errorMsg;
+                else camStatus.textContent = errorMsg;
+                return;
+            }
+            let status = '', colorClass = '', quality = '', confidence = '';
+            if (angle >= THRESHOLD_CRITICAL) {
+                status = 'CRITICAL! Loosen immediately!';
+                colorClass = 'critical'; quality = 'Critical';
+                confidence = 'Immediate action';
+            } else if (angle >= THRESHOLD_WARNING) {
+                status = 'WARNING! Bend too tight';
+                colorClass = 'warning'; quality = 'Poor';
+                confidence = 'Schedule rework';
+            } else if (angle >= THRESHOLD_GOOD) {
+                status = 'CAUTION. Bend approaching limit';
+                colorClass = 'caution'; quality = 'Fair';
+                confidence = 'Monitor';
+            } else {
+                status = 'GOOD. Bend within spec';
+                colorClass = 'good'; quality = 'Excellent';
+                confidence = 'Pass';
+            }
+            if (isUpload) {
+                uploadAngle.textContent = `${Math.round(angle)}°`;
+                uploadAngle.className = `angle-display ${colorClass}`;
+                uploadStatus.textContent = status;
+                uploadStatus.className = `status-text ${colorClass}`;
+                uploadGauge.style.width = `${angle}%`;
+                uploadGauge.className = `gauge-fill bg-${colorClass}`;
+                uploadQuality.textContent = quality;
+                let recommendation = angle < 25 ? 'Passes inspection' : (angle < 50 ? 'Monitor during maintenance' : (angle < 70 ? 'Schedule rework within 30 days' : 'Immediate rework required'));
+                uploadRecommendation.textContent = recommendation;
+            } else {
+                camAngle.textContent = `${Math.round(angle)}°`;
+                camAngle.className = `angle-display ${colorClass}`;
+                camStatus.textContent = status;
+                camStatus.className = `status-text ${colorClass}`;
+                camGauge.style.width = `${angle}%`;
+                camGauge.className = `gauge-fill bg-${colorClass}`;
+                camQuality.textContent = quality;
+                camConfidence.textContent = confidence;
+            }
+        }
+        
+        async function captureAndAnalyze() {
+            if (!video.videoWidth) return;
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const base64 = canvas.toDataURL('image/jpeg', 0.7);
+            await analyzeImage(base64, false);
+        }
+        
+        function startAnalysisLoop() {
+            if (analysisInterval) clearInterval(analysisInterval);
+            analysisInterval = setInterval(captureAndAnalyze, 1000);
+        }
+        
+        async function startCamera() {
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            try {
+                const constraints = { video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } };
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                await video.play();
+                startAnalysisLoop();
+            } catch (err) { camStatus.textContent = 'Camera access denied'; }
+        }
+        
+        async function handleImageUpload(file) {
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                previewImage.src = e.target.result;
+                previewContainer.style.display = 'block';
+                uploadResults.style.display = 'none';
+                loadingDiv.style.display = 'flex';
+                await analyzeImage(e.target.result, true);
+                loadingDiv.style.display = 'none';
+                uploadResults.style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function resetUpload() {
+            uploadResults.style.display = 'none';
+            previewContainer.style.display = 'none';
+            fileInput.value = '';
+            uploadArea.style.display = 'block';
+        }
+        
+        modeGuidanceBtn.onclick = () => {
+            modeGuidanceBtn.classList.add('active');
+            modeUploadBtn.classList.remove('active');
+            cameraView.classList.add('active');
+            uploadView.classList.remove('active');
+            startCamera();
+        };
+        modeUploadBtn.onclick = () => {
+            modeUploadBtn.classList.add('active');
+            modeGuidanceBtn.classList.remove('active');
+            uploadView.classList.add('active');
+            cameraView.classList.remove('active');
+            if (analysisInterval) clearInterval(analysisInterval);
+            if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+        };
+        uploadArea.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => { if (e.target.files && e.target.files[0]) handleImageUpload(e.target.files[0]); };
+        resetUploadBtn.onclick = resetUpload;
+        
+        setInterval(checkServerConnection, 5000);
+        checkServerConnection();
+        startCamera();
+    </script>
+</body>
+</html>
