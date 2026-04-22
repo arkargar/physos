@@ -1,0 +1,6 @@
+flask
+flask_cors
+tensorflow
+opencv-python
+scikit-image
+pillow
